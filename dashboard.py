@@ -132,7 +132,7 @@ def api_stats():
     return jsonify(viz.summary_stats())
 
 @app.route('/api/charts/<name>')
-def api_chart(n):
+def api_chart(name):
     minutes = int(request.args.get('minutes', 30))
     charts  = {
         'traffic_volume':    lambda: viz.traffic_volume_chart(minutes),
@@ -142,7 +142,7 @@ def api_chart(n):
         'packet_size':       viz.packet_size_histogram,
         'anomalies_over_time': lambda: viz.anomalies_over_time_chart(minutes),
     }
-    fn = charts.get(n)
+    fn = charts.get(name)
     if not fn:
         return jsonify({'error': 'Unknown chart'}), 404
     return jsonify(fn())
