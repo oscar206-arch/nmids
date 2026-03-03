@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Simulate{% endblock %}
+{% block page_title %}Traffic Simulation{% endblock %}
+
+{% block content %}
+<div class="sim-controls panel">
+  <div class="control-row">
+    <div>
+      <label class="form-label">Packet Rate: <strong id="rate-val">{{ current_rate }}</strong>/s</label>
+      <input type="range" id="rate-slider" min="0.5" max="20" step="0.5"
+             value="{{ current_rate }}" class="slider"/>
+    </div>
+    <div class="btn-group">
+      <button id="btn-start" class="btn btn-primary"
+              {% if is_running %}style="display:none"{% endif %}>▶ Start</button>
+      <button id="btn-stop"  class="btn btn-danger"
+              {% if not is_running %}style="display:none"{% endif %}>■ Stop</button>
+    </div>
+  </div>
+</div>
+
+<!-- Scenario cards -->
+<h3 class="section-title">Select Scenario</h3>
+<div class="scenario-grid" id="scenario-grid">
+  {% for key, desc in scenarios.items() %}
+  <div class="scenario-card {% if key == current_scenario %}selected{% endif %}"
+       data-scenario="{{ key }}">
+    <div class="scenario-name">{{ key.replace('_',' ').title() }}</div>
+    <div class="scenario-desc">{{ desc }}</div>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- Live detection feed -->
+<div class="panel">
+  <h3 class="panel-title">Live Detection Feed <span class="live-dot"></span></h3>
+  <div id="detection-feed" class="detection-feed"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let selectedScenario = '{{ current_scenario }}';
+let isRunning        = {{ 'true' if is_running else 'false' }};
+
+document.querySelectorAll('.scenario-card').forEach(card => {
+  card.onclick = () => {
+    document.querySelectorAll('.scenario-card').forEach(c => c.classList.remove('selected'));
+    card.classList.add('selected');
+    selectedScenario = card.dataset.scenario;
+    if (isRunning) updateSim();
+  };
+});
+
+const rateSlider = document.getElementById('rate-slider');
+const rateVal    = document.getElementById('rate-val');
+rateSlider.oninput = () => {
+  rateVal.textContent = rateSlider.value;
+  if (isRunning) updateSim();
+};
+
+async function updateSim() {
+  await fetch('/api/simulate/update', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ scenario: selectedScenario, rate: parseFloat(rateSlider.value) })
+  });
+}
+
+document.getElementById('btn-start').onclick = async () => {
+  await fetch('/api/simulate/start', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ scenario: selectedScenario, rate: parseFloat(rateSlider.value) })
+  });
+  isRunning = true;
+  document.getElementById('btn-start').style.display = 'none';
+  document.getElementById('btn-stop').style.display  = '';
+};
+
+document.getElementById('btn-stop').onclick = async () => {
+  await fetch('/api/simulate/stop', { method:'POST' });
+  isRunning = false;
+  document.getElementById('btn-stop').style.display  = 'none';
+  document.getElementById('btn-start').style.display = '';
+};
+
+// Detection feed from SSE alert stream
+const feed = document.getElementById('detection-feed');
+const sse  = new EventSource('/api/stream');
+sse.onmessage = (e) => {
+  const a   = JSON.parse(e.data);
+  const div = document.createElement('div');
+  div.className = `feed-entry sev-${a.severity.toLowerCase()}`;
+  div.textContent = `[${a.timestamp.slice(11)}] ${a.severity} — ${a.alert_type.replace(/_/g,' ')}: ${a.description}`;
+  feed.prepend(div);
+  if (feed.children.length > 100) feed.removeChild(feed.lastChild);
+};
+</script>
+{% endblock %}

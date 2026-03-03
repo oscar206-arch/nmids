@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block page_title %}Network Overview{% endblock %}
+
+{% block content %}
+<!-- ── Stat cards ──────────────────────────────────────────────────── -->
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="stat-label">Total Packets</div>
+    <div class="stat-value" id="s-packets">{{ stats.total_packets }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Anomalies</div>
+    <div class="stat-value text-danger" id="s-anomalies">{{ stats.anomaly_count }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Active Alerts</div>
+    <div class="stat-value text-warning" id="s-active">{{ stats.active_alerts }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Total Alerts</div>
+    <div class="stat-value" id="s-total-alerts">{{ stats.total_alerts }}</div>
+  </div>
+</div>
+
+<!-- ── Charts row 1 ────────────────────────────────────────────────── -->
+<div class="chart-grid">
+  <div class="chart-card wide">
+    <h3 class="chart-title">Traffic Volume over Time</h3>
+    <canvas id="chart-traffic"></canvas>
+  </div>
+  <div class="chart-card">
+    <h3 class="chart-title">Protocol Distribution</h3>
+    <canvas id="chart-proto"></canvas>
+  </div>
+</div>
+
+<!-- ── Charts row 2 ────────────────────────────────────────────────── -->
+<div class="chart-grid">
+  <div class="chart-card">
+    <h3 class="chart-title">Alert Severity</h3>
+    <canvas id="chart-severity"></canvas>
+  </div>
+  <div class="chart-card">
+    <h3 class="chart-title">Alert Types</h3>
+    <canvas id="chart-type"></canvas>
+  </div>
+  <div class="chart-card">
+    <h3 class="chart-title">Packet Size Distribution</h3>
+    <canvas id="chart-pktsize"></canvas>
+  </div>
+</div>
+
+<!-- ── Live packet feed ────────────────────────────────────────────── -->
+<div class="panel">
+  <h3 class="panel-title">Live Packet Feed <span class="live-dot"></span></h3>
+  <div class="table-wrapper">
+    <table class="data-table" id="pkt-table">
+      <thead>
+        <tr>
+          <th>Time</th><th>Src IP</th><th>Dst IP</th>
+          <th>Proto</th><th>Size</th><th>Port</th><th>Flags</th><th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="pkt-tbody"></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const chartDefaults = {
+  responsive: true,
+  plugins: { legend: { labels: { color: '#a0aec0' } } },
+  scales: {
+    x: { ticks: { color: '#a0aec0' }, grid: { color: '#1e293b' } },
+    y: { ticks: { color: '#a0aec0' }, grid: { color: '#1e293b' } }
+  }
+};
+
+let trafficChart, protoChart, severityChart, typeChart, pktsizeChart;
+
+async function loadChart(name, canvasId, type, extraOpts = {}) {
+  const r    = await fetch(`/api/charts/${name}`);
+  const data = await r.json();
+  const ctx  = document.getElementById(canvasId).getContext('2d');
+  return new Chart(ctx, {
+    type,
+    data,
+    options: { ...chartDefaults, ...extraOpts }
+  });
+}
+
+async function refreshStats() {
+  const r = await fetch('/api/stats');
+  const d = await r.json();
+  document.getElementById('s-packets').textContent      = d.total_packets.toLocaleString();
+  document.getElementById('s-anomalies').textContent    = d.anomaly_count.toLocaleString();
+  document.getElementById('s-active').textContent       = d.active_alerts.toLocaleString();
+  document.getElementById('s-total-alerts').textContent = d.total_alerts.toLocaleString();
+}
+
+async function refreshCharts() {
+  async function updateChart(chart, name) {
+    const r    = await fetch(`/api/charts/${name}`);
+    const data = await r.json();
+    chart.data = data;
+    chart.update('none');
+  }
+  if (trafficChart)  updateChart(trafficChart,  'traffic_volume');
+  if (severityChart) updateChart(severityChart, 'alert_severity');
+  if (typeChart)     updateChart(typeChart,      'alert_type');
+  if (pktsizeChart)  updateChart(pktsizeChart,   'packet_size');
+  if (protoChart)    updateChart(protoChart,     'protocol');
+}
+
+(async () => {
+  trafficChart  = await loadChart('traffic_volume', 'chart-traffic',   'line',
+    { plugins: { legend: { labels: { color: '#a0aec0' } } } });
+  protoChart    = await loadChart('protocol',       'chart-proto',     'doughnut',
+    { scales: {}, cutout: '60%' });
+  severityChart = await loadChart('alert_severity', 'chart-severity',  'bar');
+  typeChart     = await loadChart('alert_type',     'chart-type',      'bar',
+    { indexAxis: 'y' });
+  pktsizeChart  = await loadChart('packet_size',    'chart-pktsize',   'bar');
+
+  setInterval(refreshStats,  5000);
+  setInterval(refreshCharts, 15000);
+})();
+
+// ── Live packet feed via SSE ───────────────────────────────────────────
+const tbody   = document.getElementById('pkt-tbody');
+const MAX_ROWS = 50;
+
+const sse = new EventSource('/api/packet_stream');
+sse.onmessage = (e) => {
+  const p    = JSON.parse(e.data);
+  const row  = document.createElement('tr');
+  const cls  = p.is_anomaly ? 'row-anomaly' : '';
+  row.className = cls;
+  row.innerHTML = `
+    <td>${p.timestamp.slice(11)}</td>
+    <td>${p.src_ip}</td>
+    <td>${p.dst_ip}</td>
+    <td><span class="proto-badge proto-${p.protocol.toLowerCase()}">${p.protocol}</span></td>
+    <td>${p.packet_size}</td>
+    <td>${p.port}</td>
+    <td>${p.flags || '—'}</td>
+    <td>${p.is_anomaly
+          ? `<span class="badge-anomaly">${p.anomaly_type}</span>`
+          : '<span class="badge-normal">Normal</span>'}</td>
+  `;
+  tbody.prepend(row);
+  while (tbody.rows.length > MAX_ROWS) tbody.deleteRow(tbody.rows.length - 1);
+};
+</script>
+{% endblock %}

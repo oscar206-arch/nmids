@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>NMIDS – {% block title %}Dashboard{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  {% block head %}{% endblock %}
+</head>
+<body>
+
+<!-- ── Sidebar navigation ──────────────────────────────────────────── -->
+<nav class="sidebar">
+  <div class="sidebar-brand">
+    <span class="brand-icon">⬡</span>
+    <span class="brand-text">NMIDS</span>
+  </div>
+  <ul class="nav-links">
+    <li><a href="/"          class="{% if request.path=='/'           %}active{% endif %}">
+        <span class="nav-icon">◈</span> Dashboard</a></li>
+    <li><a href="/alerts"    class="{% if request.path=='/alerts'     %}active{% endif %}">
+        <span class="nav-icon">⚠</span> Alerts
+        <span id="nav-badge" class="badge hidden">0</span></a></li>
+    <li><a href="/simulate"  class="{% if request.path=='/simulate'   %}active{% endif %}">
+        <span class="nav-icon">▶</span> Simulate</a></li>
+    <li><a href="/learning"  class="{% if request.path=='/learning'   %}active{% endif %}">
+        <span class="nav-icon">◉</span> Learning</a></li>
+    <li><a href="/database"  class="{% if request.path=='/database'   %}active{% endif %}">
+        <span class="nav-icon">⊞</span> Database</a></li>
+    <li><a href="/export"    class="{% if request.path=='/export'     %}active{% endif %}">
+        <span class="nav-icon">↓</span> Export</a></li>
+  </ul>
+  <div class="sidebar-status">
+    <div class="status-dot" id="sim-status-dot"></div>
+    <span id="sim-status-text">Idle</span>
+  </div>
+</nav>
+
+<!-- ── Main content ─────────────────────────────────────────────────── -->
+<main class="main-content">
+  <header class="page-header">
+    <h1 class="page-title">{% block page_title %}Dashboard{% endblock %}</h1>
+    <div class="header-right">
+      <span class="clock" id="clock"></span>
+    </div>
+  </header>
+
+  {% block content %}{% endblock %}
+</main>
+
+<!-- ── Global scripts ───────────────────────────────────────────────── -->
+<script>
+  // Live clock
+  function updateClock() {
+    document.getElementById('clock').textContent =
+      new Date().toLocaleTimeString('en-GB', {hour12: false});
+  }
+  updateClock(); setInterval(updateClock, 1000);
+
+  // Simulation status polling
+  async function pollSimStatus() {
+    try {
+      const r = await fetch('/api/simulate/status');
+      const d = await r.json();
+      const dot  = document.getElementById('sim-status-dot');
+      const txt  = document.getElementById('sim-status-text');
+      dot.className = 'status-dot ' + (d.running ? 'running' : '');
+      txt.textContent = d.running ? `▶ ${d.scenario} @ ${d.rate}/s` : 'Idle';
+    } catch(e) {}
+  }
+  pollSimStatus(); setInterval(pollSimStatus, 3000);
+
+  // Unacknowledged alert badge
+  async function pollBadge() {
+    try {
+      const r = await fetch('/api/stats');
+      const d = await r.json();
+      const b = document.getElementById('nav-badge');
+      if (d.active_alerts > 0) {
+        b.textContent = d.active_alerts;
+        b.classList.remove('hidden');
+      } else {
+        b.classList.add('hidden');
+      }
+    } catch(e) {}
+  }
+  pollBadge(); setInterval(pollBadge, 5000);
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

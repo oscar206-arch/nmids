@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}Alerts{% endblock %}
+{% block page_title %}Intrusion Alerts{% endblock %}
+
+{% block content %}
+<div class="toolbar">
+  <button class="btn btn-primary" id="btn-ack-all">Acknowledge All</button>
+  <button class="btn btn-danger"  id="btn-clear">Clear All</button>
+  <label class="toggle-label">
+    <input type="checkbox" id="unacked-only"> Unacknowledged only
+  </label>
+  <span class="ml-auto" id="alert-count-label">Loading…</span>
+</div>
+
+<!-- Severity filter pills -->
+<div class="pill-group">
+  <button class="pill active" data-sev="ALL">All</button>
+  <button class="pill pill-critical" data-sev="CRITICAL">Critical</button>
+  <button class="pill pill-high"     data-sev="HIGH">High</button>
+  <button class="pill pill-medium"   data-sev="MEDIUM">Medium</button>
+  <button class="pill pill-low"      data-sev="LOW">Low</button>
+</div>
+
+<div class="panel">
+  <div class="table-wrapper">
+    <table class="data-table" id="alerts-table">
+      <thead>
+        <tr>
+          <th>#</th><th>Time</th><th>Severity</th><th>Type</th>
+          <th>Src IP</th><th>Dst IP</th><th>Description</th><th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="alerts-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Live alert toast container -->
+<div id="toast-container"></div>
+
+<!-- SSE badge colour → severity -->
+<div id="sse-indicator" class="sse-badge">● LIVE</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allAlerts  = [];
+let filterSev  = 'ALL';
+let unackedOnly = false;
+
+const tbody = document.getElementById('alerts-tbody');
+
+function sevClass(s) {
+  return { CRITICAL:'sev-critical', HIGH:'sev-high', MEDIUM:'sev-medium', LOW:'sev-low' }[s] || '';
+}
+
+function renderAlerts() {
+  let data = allAlerts;
+  if (filterSev !== 'ALL')  data = data.filter(a => a.severity === filterSev);
+  if (unackedOnly)          data = data.filter(a => !a.acknowledged);
+
+  document.getElementById('alert-count-label').textContent =
+    `Showing ${data.length} of ${allAlerts.length} alerts`;
+
+  tbody.innerHTML = '';
+  data.forEach(a => {
+    const tr = document.createElement('tr');
+    tr.className = a.acknowledged ? 'row-acked' : '';
+    tr.innerHTML = `
+      <td>${a.id}</td>
+      <td>${a.timestamp.slice(11)}</td>
+      <td><span class="sev-badge ${sevClass(a.severity)}">${a.severity}</span></td>
+      <td>${a.alert_type.replace(/_/g,' ')}</td>
+      <td>${a.src_ip}</td>
+      <td>${a.dst_ip}</td>
+      <td class="desc-cell">${a.description}</td>
+      <td>${a.acknowledged
+            ? '<span class="text-muted">Acked</span>'
+            : `<button class="btn-sm" onclick="ackOne(${a.id})">Ack</button>`}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+async function loadAlerts() {
+  const r    = await fetch('/api/alerts?limit=500');
+  allAlerts  = await r.json();
+  renderAlerts();
+}
+
+async function ackOne(id) {
+  await fetch(`/api/alerts/acknowledge/${id}`, { method:'POST' });
+  const a = allAlerts.find(x => x.id === id);
+  if (a) a.acknowledged = true;
+  renderAlerts();
+}
+
+document.getElementById('btn-ack-all').onclick = async () => {
+  await fetch('/api/alerts/acknowledge_all', { method:'POST' });
+  allAlerts.forEach(a => a.acknowledged = true);
+  renderAlerts();
+};
+
+document.getElementById('btn-clear').onclick = async () => {
+  if (!confirm('Permanently delete all alert records?')) return;
+  await fetch('/api/alerts/clear', { method:'POST' });
+  allAlerts = [];
+  renderAlerts();
+};
+
+document.getElementById('unacked-only').onchange = (e) => {
+  unackedOnly = e.target.checked;
+  renderAlerts();
+};
+
+document.querySelectorAll('.pill').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('.pill').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    filterSev = btn.dataset.sev;
+    renderAlerts();
+  };
+});
+
+// SSE live incoming alerts
+const sse = new EventSource('/api/stream');
+sse.onmessage = (e) => {
+  const a = JSON.parse(e.data);
+  allAlerts.unshift(a);
+  renderAlerts();
+  showToast(a);
+};
+
+function showToast(a) {
+  const t = document.createElement('div');
+  t.className = `toast toast-${a.severity.toLowerCase()}`;
+  t.textContent = `${a.severity} — ${a.alert_type.replace(/_/g,' ')}: ${a.src_ip}`;
+  document.getElementById('toast-container').appendChild(t);
+  setTimeout(() => t.remove(), 5000);
+}
+
+loadAlerts();
+setInterval(loadAlerts, 10000);
+</script>
+{% endblock %}

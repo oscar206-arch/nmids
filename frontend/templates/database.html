@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Database{% endblock %}
+{% block page_title %}Database Inspector{% endblock %}
+
+{% block content %}
+<!-- DB stats -->
+<div class="stat-grid">
+  {% for tbl, cnt in counts.items() if tbl != 'db_size_bytes' %}
+  <div class="stat-card">
+    <div class="stat-label">{{ tbl }}</div>
+    <div class="stat-value">{{ "{:,}".format(cnt) }}</div>
+  </div>
+  {% endfor %}
+  <div class="stat-card">
+    <div class="stat-label">DB Size</div>
+    <div class="stat-value">{{ "%.1f"|format(counts.db_size_bytes / 1024) }} KB</div>
+  </div>
+</div>
+
+<!-- Schema browser -->
+<h3 class="section-title">Schema Browser</h3>
+<div class="schema-tabs">
+  {% for table, info in schema.items() %}
+  <button class="schema-tab {% if loop.first %}active{% endif %}"
+          onclick="showSchema('{{ table }}', this)">{{ table }}</button>
+  {% endfor %}
+</div>
+{% for table, info in schema.items() %}
+<div id="schema-{{ table }}" class="schema-panel {% if not loop.first %}hidden{% endif %} panel">
+  <h4>{{ table }}</h4>
+  <table class="data-table">
+    <thead><tr><th>cid</th><th>Name</th><th>Type</th><th>Not Null</th><th>Default</th><th>PK</th></tr></thead>
+    <tbody>
+      {% for col in info.columns %}
+      <tr>
+        <td>{{ col.cid }}</td>
+        <td>{{ '🔑 ' if col.pk else '' }}{{ col.name }}</td>
+        <td><code>{{ col.type }}</code></td>
+        <td>{{ '✓' if col.notnull else '' }}</td>
+        <td>{{ col.dflt_value or '—' }}</td>
+        <td>{{ '✓' if col.pk else '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if info.indexes %}
+  <h5>Indexes</h5>
+  <ul class="index-list">
+    {% for idx in info.indexes %}
+    <li><code>{{ idx.name }}</code> on ({{ idx.columns | join(', ') }})
+        {% if idx.unique %}<span class="badge-unique">UNIQUE</span>{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endfor %}
+
+<!-- Paginated row browser -->
+<h3 class="section-title">Row Browser</h3>
+<div class="panel">
+  <div class="toolbar">
+    <select id="browse-table" class="form-select">
+      <option value="traffic_log">traffic_log</option>
+      <option value="alerts">alerts</option>
+      <option value="baseline">baseline</option>
+    </select>
+    <select id="browse-per-page" class="form-select">
+      <option>25</option><option>50</option><option>100</option>
+    </select>
+    <input type="text" id="browse-filter-val" placeholder="Filter value…" class="form-input"/>
+    <button class="btn btn-primary" onclick="loadRows()">Fetch</button>
+  </div>
+  <div id="row-browser-result"></div>
+</div>
+
+<!-- SQL Console -->
+<h3 class="section-title">SQL Console <span class="badge-readonly">READ-ONLY</span></h3>
+<div class="panel">
+  <textarea id="sql-input" class="sql-input" rows="4"
+    placeholder="SELECT * FROM alerts WHERE severity='CRITICAL' LIMIT 10;"></textarea>
+  <div class="btn-group">
+    <button class="btn btn-primary" onclick="runQuery()">▶ Run Query</button>
+    <button class="btn" onclick="document.getElementById('sql-input').value=''">Clear</button>
+  </div>
+  <div id="sql-result"></div>
+</div>
+
+<!-- Maintenance -->
+<h3 class="section-title">Maintenance</h3>
+<div class="panel">
+  <div class="toolbar">
+    <button class="btn" onclick="doVacuum()">⬡ VACUUM (reclaim storage)</button>
+    <label class="form-label">Purge traffic_log older than
+      <input type="number" id="purge-days" value="7" min="1" class="form-input-sm"/> days
+    </label>
+    <button class="btn btn-danger" onclick="doPurge()">🗑 Purge</button>
+  </div>
+  <div id="maint-result"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function showSchema(table, btn) {
+  document.querySelectorAll('.schema-panel').forEach(p => p.classList.add('hidden'));
+  document.querySelectorAll('.schema-tab').forEach(b => b.classList.remove('active'));
+  document.getElementById('schema-' + table).classList.remove('hidden');
+  btn.classList.add('active');
+}
+
+async function loadRows() {
+  const table   = document.getElementById('browse-table').value;
+  const perPage = document.getElementById('browse-per-page').value;
+  const filter  = document.getElementById('browse-filter-val').value;
+  const url     = `/api/db/tables/${table}?per_page=${perPage}&filter_val=${encodeURIComponent(filter)}`;
+  const r = await fetch(url);
+  const d = await r.json();
+  if (d.error) { document.getElementById('row-browser-result').innerHTML = `<p class="error">${d.error}</p>`; return; }
+  const thead = '<tr>' + d.columns.map(c => `<th>${c}</th>`).join('') + '</tr>';
+  const tbody = d.rows.map(row => '<tr>' + d.columns.map(c => `<td>${row[c] ?? '—'}</td>`).join('') + '</tr>').join('');
+  document.getElementById('row-browser-result').innerHTML = `
+    <p class="text-muted">Rows ${(d.page-1)*d.per_page+1}–${Math.min(d.page*d.per_page,d.total)} of ${d.total}</p>
+    <div class="table-wrapper"><table class="data-table"><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
+}
+
+async function runQuery() {
+  const sql = document.getElementById('sql-input').value.trim();
+  const r   = await fetch('/api/db/query', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sql})
+  });
+  const d = await r.json();
+  const el = document.getElementById('sql-result');
+  if (d.error) { el.innerHTML = `<p class="error">Error: ${d.error}</p>`; return; }
+  if (!d.columns.length) { el.innerHTML = '<p class="text-muted">No results.</p>'; return; }
+  const thead = '<tr>' + d.columns.map(c => `<th>${c}</th>`).join('') + '</tr>';
+  const tbody = d.rows.map(row => '<tr>' + row.map(v => `<td>${v ?? 'NULL'}</td>`).join('') + '</tr>').join('');
+  el.innerHTML = `<p class="text-muted">${d.count} row(s) returned</p>
+    <div class="table-wrapper"><table class="data-table"><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
+}
+
+async function doVacuum() {
+  await fetch('/api/db/vacuum', {method:'POST'});
+  document.getElementById('maint-result').innerHTML = '<p class="text-success">VACUUM completed.</p>';
+}
+
+async function doPurge() {
+  const days = document.getElementById('purge-days').value;
+  if (!confirm(`Delete traffic_log entries older than ${days} days?`)) return;
+  const r = await fetch('/api/db/purge', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({days})});
+  const d = await r.json();
+  document.getElementById('maint-result').innerHTML = `<p class="text-success">Purged ${d.deleted} rows.</p>`;
+}
+</script>
+{% endblock %}

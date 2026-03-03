@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Learning Mode{% endblock %}
+{% block page_title %}Learning Mode{% endblock %}
+
+{% block content %}
+<div class="panel">
+  <p class="panel-description">
+    Learning Mode suppresses all alerts while recording baseline traffic patterns.
+    Enable it before starting simulation to build a clean traffic profile.
+  </p>
+  <div class="btn-group">
+    <button id="btn-learn-start" class="btn btn-primary"
+            {% if learning_mode %}style="display:none"{% endif %}>◉ Start Learning</button>
+    <button id="btn-learn-stop"  class="btn btn-warning"
+            {% if not learning_mode %}style="display:none"{% endif %}>■ Stop Learning</button>
+  </div>
+  <div id="learn-status" class="learn-status {{ 'learning' if learning_mode else '' }}">
+    {{ '⚡ Learning Mode Active — alerts suppressed' if learning_mode else 'Learning mode inactive' }}
+  </div>
+</div>
+
+<h3 class="section-title">Baseline Profiles</h3>
+<div class="panel">
+  <div class="table-wrapper">
+    <table class="data-table" id="baseline-table">
+      <thead><tr><th>Protocol</th><th>Avg Packet Size (B)</th><th>Avg Rate</th><th>Samples</th><th>Updated</th></tr></thead>
+      <tbody id="baseline-tbody">
+        {% for b in baselines %}
+        <tr>
+          <td>{{ b.protocol }}</td>
+          <td>{{ "%.1f"|format(b.avg_size) }}</td>
+          <td>{{ "%.2f"|format(b.avg_rate) }}</td>
+          <td>{{ b.sample_count }}</td>
+          <td>{{ b.updated_at }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="text-muted text-center">No baselines yet — run Learning Mode first.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('btn-learn-start').onclick = async () => {
+  await fetch('/api/learning/start', { method: 'POST' });
+  document.getElementById('btn-learn-start').style.display = 'none';
+  document.getElementById('btn-learn-stop').style.display  = '';
+  document.getElementById('learn-status').className = 'learn-status learning';
+  document.getElementById('learn-status').textContent = '⚡ Learning Mode Active — alerts suppressed';
+};
+document.getElementById('btn-learn-stop').onclick = async () => {
+  const r = await fetch('/api/learning/stop', { method: 'POST' });
+  const d = await r.json();
+  document.getElementById('btn-learn-stop').style.display  = 'none';
+  document.getElementById('btn-learn-start').style.display = '';
+  document.getElementById('learn-status').className = 'learn-status';
+  document.getElementById('learn-status').textContent = 'Learning mode inactive';
+  // Refresh baselines
+  const br = await fetch('/api/learning/baseline');
+  const bs = await br.json();
+  const tbody = document.getElementById('baseline-tbody');
+  tbody.innerHTML = bs.length ? bs.map(b => `
+    <tr>
+      <td>${b.protocol}</td>
+      <td>${b.avg_size.toFixed(1)}</td>
+      <td>${b.avg_rate.toFixed(2)}</td>
+      <td>${b.sample_count}</td>
+      <td>${b.updated_at}</td>
+    </tr>`).join('') : '<tr><td colspan="5" class="text-muted text-center">No baselines yet.</td></tr>';
+};
+</script>
+{% endblock %}
