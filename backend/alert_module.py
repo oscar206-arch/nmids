@@ -94,7 +94,7 @@ class AlertModule:
         finally:
             self.unsubscribe(q)
 
-    # ─── Packet stream for live feed ──────────────────────────────────────────
+    # ─── Packet stream for live feed ─
 
 
 
